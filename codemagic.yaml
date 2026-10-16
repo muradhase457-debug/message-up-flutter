@@ -63,6 +63,32 @@ workflows:
         # --org + --project-name fix the applicationId to com.murad.message_up.
         script: |
           flutter create --org com.murad --project-name message_up --platforms=android .
+      - name: Force compileSdk 35 for every Android module (fixes firebase_auth pin)
+        # ROOT CAUSE (proven by build log 2026-10-16): firebase_auth 4.x
+        # pins compileSdk 33 in its own build.gradle, but its AndroidX
+        # helpers (exifinterface 1.4.1, annotation-experimental 1.4.0,
+        # lifecycle, core, ...) now require compileSdk 34+. AGP then stops
+        # the build at the AAR-metadata check. The app's own compileSdk
+        # does NOT fix this — the pin lives inside the plugin.
+        # This Gradle init script overrides compileSdk to 35 for EVERY
+        # module (app + all plugins) after each project is evaluated,
+        # without touching anything in the pub cache. Modules that use
+        # the newer DSL (no compileSdkVersion method) safely skip it.
+        script: |
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/compile-sdk.gradle <<'EOF'
+          allprojects {
+              afterEvaluate { project ->
+                  if (project.hasProperty('android')) {
+                      try {
+                          project.android.compileSdkVersion 35
+                      } catch (Exception ignored) {
+                      }
+                  }
+              }
+          }
+          EOF
+          echo "compileSdk override installed"
       - name: Copy google-services.json into android/app (if present at repo root)
         # The repo has no android/ folder, so you put google-services.json
         # at the REPO ROOT (next to pubspec.yaml). This step copies it to
