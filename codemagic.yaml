@@ -54,10 +54,6 @@ workflows:
     max_build_duration: 60
     environment:
       flutter: stable
-    triggering_events:
-      - push
-      - pull_request
-      - tag
     scripts:
       - name: Generate missing Android scaffold (safe, keeps lib/ + pubspec)
         # The project ships lib/ + pubspec.yaml only — there is NO android/
