@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "986163719160",
+    "project_id": "message-up-c2a85",
+    "storage_bucket": "message-up-c2a85.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:986163719160:android:d7dcb7beac93f83046c40d",
+        "android_client_info": {
+          "package_name": "com.murad.message_up"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "986163719160-9rmrgj796962tipnelci6s9pqv34c2h2.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBhsWkJ1Pcs9tdUsX44ifzL-DMh_B3TAWk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "986163719160-9rmrgj796962tipnelci6s9pqv34c2h2.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
