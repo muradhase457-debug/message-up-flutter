@@ -28,10 +28,12 @@
 #         put it at the REPO ROOT (same place as pubspec.yaml) — the
 #         workflow below copies it into android/app/ automatically,
 #         because the repo has no android/ folder yet.
-#      b. Fill lib/firebase_options.dart with the real values from
-#         Firebase Console (Project settings -> Your apps -> Web app).
-#         Until this file is filled, the app shows the setup screen
-#         (never a crash) — see lib/main.dart.
+#      b. firebase_options.dart is AUTO-GENERATED during the build from
+#         google-services.json (step "Generate firebase_options.dart"
+#         below). You do NOT need to fill it by hand, and you never need
+#         to copy any key anywhere. Keep the template file in the repo —
+#         the build overwrites it with real values before compiling.
+#         (On a PC, `flutterfire configure` does the same job.)
 #      c. FIRST BUILD prints the debug keystore SHA-1 in the build log
 #         (step "Print debug keystore SHA-1" below). Copy that SHA-1 into
 #         Firebase Console -> Project settings -> Android app ->
@@ -72,6 +74,111 @@ workflows:
         # in the repo, this step safely does nothing and the build continues.
         script: |
           if [ -f google-services.json ]; then cp google-services.json android/app/google-services.json && echo "google-services.json copied"; else echo "google-services.json not at repo root yet — add it (header step 4a) and rebuild"; fi
+      - name: Generate firebase_options.dart from google-services.json
+        # AUTO-GENERATION: reads the repo-root google-services.json and
+        # writes lib/firebase_options.dart with the REAL values before
+        # compiling — nobody has to copy any key by hand, so no typo can
+        # sneak in. If google-services.json is not in the repo yet, this
+        # step leaves the template in place and the build continues (the
+        # app then shows the Setup Needed screen — see lib/main.dart).
+        # If the file IS present but broken/missing a field, the step
+        # stops the build with a clear message naming the missing field.
+        script: |
+          python3 - <<'PY'
+          import json, sys, os
+          src = 'google-services.json'
+          out = 'lib/firebase_options.dart'
+          if not os.path.exists(src):
+              print('google-services.json not in repo yet — keeping firebase_options.dart template (app will show Setup Needed screen).')
+              sys.exit(0)
+          with open(src) as f:
+              data = json.load(f)
+          info = data.get('project_info') or {}
+          project_id = info.get('project_id', '')
+          project_number = str(info.get('project_number', ''))
+          storage_bucket = info.get('storage_bucket', '')
+          api_key = ''
+          app_id = ''
+          for client in data.get('client', []):
+              cinfo = client.get('client_info') or {}
+              if cinfo.get('android_client_info', {}).get('package_name') == 'com.murad.message_up':
+                  keys = client.get('api_key') or []
+                  if keys:
+                      api_key = keys[0].get('current_key', '')
+                  app_id = cinfo.get('mobilesdk_app_id', '')
+                  break
+          missing = [n for n, v in [('project_id', project_id), ('project_number', project_number), ('storage_bucket', storage_bucket), ('api_key', api_key), ('mobilesdk_app_id', app_id)] if not v]
+          if missing:
+              print('STOP: google-services.json is missing: ' + ', '.join(missing) + '. Re-download it from Firebase Console (Project settings -> Android app) and upload again.')
+              sys.exit(1)
+          dart = []
+          dart.append('// GENERATED during the Codemagic build from google-services.json.')
+          dart.append('// Do not edit by hand — re-download google-services.json to change values.')
+          dart.append("import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;")
+          dart.append("import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;")
+          dart.append('')
+          dart.append('class DefaultFirebaseOptions {')
+          dart.append('  static FirebaseOptions get currentPlatform {')
+          dart.append('    if (kIsWeb) { return web; }')
+          dart.append('    switch (defaultTargetPlatform) {')
+          dart.append('      case TargetPlatform.android: return android;')
+          dart.append('      case TargetPlatform.iOS: return ios;')
+          dart.append('      case TargetPlatform.macOS: return macOS;')
+          dart.append('      case TargetPlatform.windows: return windows;')
+          dart.append('      case TargetPlatform.linux: throw UnsupportedError("DefaultFirebaseOptions have not been configured for linux.");')
+          dart.append('      default: throw UnsupportedError("DefaultFirebaseOptions are not supported for this platform.");')
+          dart.append('    }')
+          dart.append('  }')
+          dart.append('')
+          dart.append('  static const FirebaseOptions web = FirebaseOptions(')
+          dart.append("    apiKey: '" + api_key + "',")
+          dart.append("    appId: '" + app_id + "',")
+          dart.append("    messagingSenderId: '" + project_number + "',")
+          dart.append("    projectId: '" + project_id + "',")
+          dart.append("    authDomain: '" + project_id + ".firebaseapp.com',")
+          dart.append("    storageBucket: '" + storage_bucket + "',")
+          dart.append('  );')
+          dart.append('')
+          dart.append('  static const FirebaseOptions android = FirebaseOptions(')
+          dart.append("    apiKey: '" + api_key + "',")
+          dart.append("    appId: '" + app_id + "',")
+          dart.append("    messagingSenderId: '" + project_number + "',")
+          dart.append("    projectId: '" + project_id + "',")
+          dart.append("    storageBucket: '" + storage_bucket + "',")
+          dart.append('  );')
+          dart.append('')
+          dart.append('  static const FirebaseOptions ios = FirebaseOptions(')
+          dart.append("    apiKey: '" + api_key + "',")
+          dart.append("    appId: '" + app_id + "',")
+          dart.append("    messagingSenderId: '" + project_number + "',")
+          dart.append("    projectId: '" + project_id + "',")
+          dart.append("    storageBucket: '" + storage_bucket + "',")
+          dart.append("    iosBundleId: 'com.murad.messageUp',")
+          dart.append('  );')
+          dart.append('')
+          dart.append('  static const FirebaseOptions macOS = FirebaseOptions(')
+          dart.append("    apiKey: '" + api_key + "',")
+          dart.append("    appId: '" + app_id + "',")
+          dart.append("    messagingSenderId: '" + project_number + "',")
+          dart.append("    projectId: '" + project_id + "',")
+          dart.append("    storageBucket: '" + storage_bucket + "',")
+          dart.append("    iosBundleId: 'com.murad.messageUp',")
+          dart.append('  );')
+          dart.append('')
+          dart.append('  static const FirebaseOptions windows = FirebaseOptions(')
+          dart.append("    apiKey: '" + api_key + "',")
+          dart.append("    appId: '" + app_id + "',")
+          dart.append("    messagingSenderId: '" + project_number + "',")
+          dart.append("    projectId: '" + project_id + "',")
+          dart.append("    authDomain: '" + project_id + ".firebaseapp.com',")
+          dart.append("    storageBucket: '" + storage_bucket + "',")
+          dart.append('  );')
+          dart.append('}')
+          dart.append('')
+          with open(out, 'w') as f:
+              f.write('\n'.join(dart))
+          print('firebase_options.dart generated from google-services.json for project ' + project_id)
+          PY
       - name: Get dependencies
         script: |
           flutter pub get
