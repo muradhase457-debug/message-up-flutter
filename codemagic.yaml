@@ -1,0 +1,116 @@
+# Message Up — Codemagic cloud build (NO PC NEEDED)
+# ---------------------------------------------------------------------------
+# What this file does:
+#   Push the project to GitHub -> Codemagic reads this file -> builds a
+#   release AAB in the cloud -> you download the AAB from Codemagic.
+#   No Flutter SDK, no Android Studio, no PC needed on your side.
+#
+# CRITICAL — READ BEFORE FIRST BUILD:
+#   1. REPO LAYOUT: Codemagic expects the Flutter project at the REPO ROOT.
+#      Upload the CONTENTS of message-up-flutter/ to the repo root
+#      (pubspec.yaml, lib/, codemagic.yaml, ... at top level), NOT the
+#      message-up-flutter/ folder itself. If the project sits in a
+#      subfolder, this workflow will fail (it runs in the repo root).
+#   2. APPLICATION ID: the first `flutter create` step below generates the
+#      Android folder with applicationId "com.murad.message_up". That ID is
+#      PERMANENT once the app is registered in Firebase / uploaded to Play.
+#      If you want a different ID, say so BEFORE the first build — after
+#      that it cannot change without making a brand-new app.
+#   3. FIRST BUILD = SETUP BUILD: Flutter's generated Android scaffold
+#      signs release builds with the DEBUG key by default. The first build
+#      proves the project compiles and produces an APK + AAB. It is the
+#      TEST build. For Play Store upload later: add a real release
+#      keystore (key.properties + .jks, never committed to git) or use
+#      Play App Signing, then rebuild.
+#   4. GOOGLE SIGN-IN SETUP (one-time, normal steps — part of the flow):
+#      a. Download google-services.json from Firebase Console
+#         (Project settings -> Android app -> google-services.json) and
+#         put it at the REPO ROOT (same place as pubspec.yaml) — the
+#         workflow below copies it into android/app/ automatically,
+#         because the repo has no android/ folder yet.
+#      b. Fill lib/firebase_options.dart with the real values from
+#         Firebase Console (Project settings -> Your apps -> Web app).
+#         Until this file is filled, the app shows the setup screen
+#         (never a crash) — see lib/main.dart.
+#      c. FIRST BUILD prints the debug keystore SHA-1 in the build log
+#         (step "Print debug keystore SHA-1" below). Copy that SHA-1 into
+#         Firebase Console -> Project settings -> Android app ->
+#         "SHA certificate fingerprints" -> Add fingerprint -> Save.
+#         Then run ONE MORE build. After that, Google Sign-In works on
+#         every build with the same debug key.
+#      (On a PC, `flutterfire configure` does a + b automatically.)
+#   5. CALLS: the Calls tab is still UI-only (WebRTC wiring TODO in
+#      lib/screens/calls_screen.dart). Everything else in this build is
+#      real + Firestore-wired.
+# ---------------------------------------------------------------------------
+
+workflows:
+  android-release:
+    name: Message Up — Android AAB (release)
+    # Android-only build, so a Linux builder is enough and cheapest.
+    instance_type: linux_x2
+    max_build_duration: 60
+    environment:
+      flutter: stable
+    triggering_events:
+      - push
+      - pull_request
+      - tag
+    scripts:
+      - name: Generate missing Android scaffold (safe, keeps lib/ + pubspec)
+        # The project ships lib/ + pubspec.yaml only — there is NO android/
+        # folder yet. `flutter create` WITHOUT --overwrite only creates the
+        # missing files and never touches existing files (lib/, pubspec.yaml,
+        # codemagic.yaml, .gitignore, analysis_options.yaml are preserved).
+        # --org + --project-name fix the applicationId to com.murad.message_up.
+        script: |
+          flutter create --org com.murad --project-name message_up --platforms=android .
+      - name: Copy google-services.json into android/app (if present at repo root)
+        # The repo has no android/ folder, so you put google-services.json
+        # at the REPO ROOT (next to pubspec.yaml). This step copies it to
+        # android/app/ where Google Sign-In reads it. If the file is not
+        # in the repo, this step safely does nothing and the build continues.
+        script: |
+          if [ -f google-services.json ]; then cp google-services.json android/app/google-services.json && echo "google-services.json copied"; else echo "google-services.json not at repo root yet — add it (header step 4a) and rebuild"; fi
+      - name: Get dependencies
+        script: |
+          flutter pub get
+      - name: Analyse (non-blocking on first runs — read the log)
+        # `flutter analyze` exits non-zero on warnings too. This build was
+        # only tokenizer-checked, never analysed, so lints may exist.
+        # Keep it non-blocking so a style lint cannot hide a compile error;
+        # the BUILD step below still fails on any real compile error.
+        # Once analyze is clean, remove the "|| true" to make it strict.
+        script: |
+          flutter analyze || true
+      - name: Build release AAB
+        # First AAB is debug-signed (Flutter template default) = TEST ONLY,
+        # not for Play Store upload. See header notes 3–4.
+        script: |
+          flutter build appbundle --release
+      - name: Build release APK (for installing on your own phone to test)
+        # AAB cannot be installed directly on a phone — APK can.
+        # Download this APK from Codemagic, tap it, install, and test the app.
+        script: |
+          flutter build apk --release
+      - name: Print debug keystore SHA-1 (copy into Firebase Console)
+        # One-time setup step (header 4c): the first build is signed with
+        # the DEBUG key. Google Sign-In checks this fingerprint. Copy the
+        # SHA-1 printed here into Firebase Console -> Project settings ->
+        # Android app -> SHA certificate fingerprints -> Add fingerprint,
+        # then run one more build. Never fails the build (|| true).
+        script: |
+          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android 2>/dev/null | grep -E "SHA1|SHA-256" || echo "SHA-1 not printed — keystore not found yet; it appears after the first successful build"
+    artifacts:
+      - build/app/outputs/bundle/release/app-release.aab
+      - build/app/outputs/flutter-apk/app-release.apk
+      - build/app/outputs/logs/**
+    publishing:
+      # No auto-publish: you download the AAB from Codemagic and decide
+      # yourself when it goes to Play Console (closed test first).
+      email:
+        recipients:
+          - muradhase457@gmail.com
+        notify:
+          success: true
+          failure: true
