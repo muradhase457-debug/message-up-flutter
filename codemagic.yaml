@@ -63,17 +63,17 @@ workflows:
         # --org + --project-name fix the applicationId to com.murad.message_up.
         script: |
           flutter create --org com.murad --project-name message_up --platforms=android .
-      - name: Force compileSdk 35 for every Android module (fixes firebase_auth pin)
-        # ROOT CAUSE (proven by build log 2026-10-16): firebase_auth 4.x
+      - name: Force compileSdk 36 for every Android module (fixes firebase_auth pin)
+        # ROOT CAUSE (proven by build logs 2026-10-16): firebase_auth 4.x
         # pins compileSdk 33 in its own build.gradle, but its AndroidX
-        # helpers (exifinterface 1.4.1, annotation-experimental 1.4.0,
-        # lifecycle, core, ...) now require compileSdk 34+. AGP then stops
-        # the build at the AAR-metadata check. The app's own compileSdk
-        # does NOT fix this — the pin lives inside the plugin.
-        # This Gradle init script overrides compileSdk to 35 for EVERY
-        # module (app + all plugins) after each project is evaluated,
-        # without touching anything in the pub cache. Modules that use
-        # the newer DSL (no compileSdkVersion method) safely skip it.
+        # helpers now require compileSdk 34+. The first fix (35) cleared
+        # the plugin complaint, but the :app module itself (new Gradle
+        # DSL, no compileSdkVersion method) still sat at 35 while its
+        # deps (androidx.activity 1.13.0, core 1.18.0, navigationevent)
+        # require 36. So this override sets BOTH forms to 36: the old
+        # compileSdkVersion method (old plugins) AND the new compileSdk
+        # property (app module, new DSL). Each in its own try/catch so
+        # a module that lacks one form simply skips it.
         script: |
           mkdir -p ~/.gradle/init.d
           cat > ~/.gradle/init.d/compile-sdk.gradle <<'EOF'
@@ -81,7 +81,11 @@ workflows:
               afterEvaluate { project ->
                   if (project.hasProperty('android')) {
                       try {
-                          project.android.compileSdkVersion 35
+                          project.android.compileSdkVersion 36
+                      } catch (Exception ignored) {
+                      }
+                      try {
+                          project.android.compileSdk = 36
                       } catch (Exception ignored) {
                       }
                   }
