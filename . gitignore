@@ -1,0 +1,41 @@
+# Flutter / Dart — keep build output, local config and secrets out of git.
+# google-services.json is INTENTIONALLY NOT ignored: Codemagic builds from
+# this repo, and Google Sign-In on Android reads android/app/google-services.json.
+# It is Firebase client config, not a secret key. NEVER commit a real
+# release keystore (.jks/.keystore) or key.properties — those ARE secrets.
+
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+.dart_tool/
+
+# IDE / OS
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Android signing secrets — NEVER commit these.
+key.properties
+*.jks
+*.keystore
+android/key.properties
+android/*.jks
+android/*.keystore
+
+# iOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+Runner.xcworkspace/
+
+# Misc
+*.log
