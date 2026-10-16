@@ -1,0 +1,9 @@
+# Lint rules for `flutter analyze` (runs in the Codemagic workflow).
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    # Keep the codebase warning-clean: unused code is the usual first-build
+    # analyze noise, and these two catch it early.
+    unused_import: true
+    unused_element: true
