@@ -23,7 +23,12 @@ class _LoginScreenState extends State<LoginScreen> {
       await context.read<AuthService>().signInWithGoogle();
       // AuthGate switches to Home automatically on authStateChanges.
     } catch (e) {
-      if (mounted) setState(() => _error = 'Sign-in failed. Please try again.');
+      // DIAGNOSTIC (temporary): show the REAL failure reason on screen
+      // (e.g. ApiException 10 = signature/fingerprint mismatch) instead
+      // of a generic message, so the exact cause can be identified.
+      if (mounted) {
+        setState(() => _error = 'Sign-in failed: $e');
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -81,7 +86,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               if (_error != null) ...[
                 const SizedBox(height: 16),
-                Text(_error!,
+                SelectableText(_error!,
                     textAlign: TextAlign.center,
                     style: const TextStyle(color: Colors.white)),
               ],
