@@ -1,99 +1,285 @@
-name: Build Android APK
+# Message Up - GitHub Actions build (v2: permanent key + Google Sign-In fix).
+#
+# WHAT CHANGED vs v1
+# 1. The APK is now signed with ONE permanent key (stored in the GitHub
+#    secret DEBUG_KEYSTORE_BASE64), so the SHA-1 never changes between builds.
+#    Permanent SHA-1:  1B:7F:77:32:5B:3B:2E:17:F9:06:17:6E:92:24:F4:30:0A:57:86:A5
+# 2. New step "Google Sign-In config" turns google-services.json into the
+#    Android string resources (default_web_client_id, google_app_id ...) that
+#    google_sign_in needs. Before, nothing created them, so login failed.
+#
+# ONE-TIME SETUP: GitHub repo -> Settings -> Secrets and variables -> Actions
+# -> New repository secret -> Name: DEBUG_KEYSTORE_BASE64 -> paste the long
+# text from keystore-secret.txt -> Add secret.
+# Then add the SHA-1 above in Firebase, re-download google-services.json,
+# upload it to the repo root, and commit this file. The commit starts a build.
+name: Build Message Up APK (free, GitHub Actions)
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
-  build:
+  build-apk:
+    name: Build release APK
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - name: Set up Java 17 (Flutter needs it)
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - uses: subosito/flutter-action@v2
+      - name: Set up Flutter (stable)
+        uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
 
-      - name: Generate Android scaffold
+      - name: Generate missing Android scaffold (safe, keeps lib/ + pubspec)
         run: flutter create --org com.murad --project-name message_up --platforms=android .
 
-      - name: Install fixed debug keystore
+      - name: Install permanent signing key
+        env:
+          KS_B64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
+          if [ -z "$KS_B64" ]; then
+            echo "::error::GitHub secret DEBUG_KEYSTORE_BASE64 is missing. Add it (Settings -> Secrets and variables -> Actions)."
+            exit 1
+          fi
           mkdir -p ~/.android
-          echo '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' | base64 -d > ~/.android/debug.keystore
-          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android | grep SHA1
+          echo "$KS_B64" | base64 -d > ~/.android/debug.keystore
+          echo "Permanent key installed. Its SHA-1:"
+          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android 2>/dev/null | grep -E "SHA1" || { echo "::error::Keystore could not be read - the secret was pasted wrongly."; exit 1; }
 
-      - name: Force compileSdk 36
+      - name: Force compileSdk 36 for every Android module
+        # Same fix as the Codemagic build had: firebase_auth 4.x pins
+        # compileSdk 33, but its AndroidX helpers need 36. This init script
+        # sets BOTH the old (compileSdkVersion) and new (compileSdk) forms.
         run: |
           mkdir -p ~/.gradle/init.d
-          cat > ~/.gradle/init.d/compile-sdk.gradle <<'GRADLE'
+          cat > ~/.gradle/init.d/compile-sdk.gradle <<'EOF'
           allprojects {
               afterEvaluate { project ->
                   if (project.hasProperty('android')) {
-                      try { project.android.compileSdkVersion 36 } catch (Exception ignored) {}
-                      try { project.android.compileSdk = 36 } catch (Exception ignored) {}
+                      try {
+                          project.android.compileSdkVersion 36
+                      } catch (Exception ignored) {
+                      }
+                      try {
+                          project.android.compileSdk = 36
+                      } catch (Exception ignored) {
+                      }
                   }
               }
           }
-          GRADLE
+          EOF
+          echo "compileSdk override installed"
 
-      - name: Copy google-services.json
-        run: cp google-services.json android/app/google-services.json
+      - name: Copy google-services.json into android/app
+        run: |
+          if [ -f google-services.json ]; then cp google-services.json android/app/google-services.json && echo "google-services.json copied"; else echo "google-services.json not at repo root yet"; exit 1; fi
 
-      - name: Generate firebase_options.dart
+      - name: Generate firebase_options.dart from google-services.json
+        # Same auto-generation the Codemagic build used: reads the repo-root
+        # google-services.json and writes lib/firebase_options.dart with the
+        # real values before compiling — nobody copies any key by hand.
         run: |
           python3 - <<'PY'
-          import json
-          d = json.load(open('google-services.json'))
-          pid = d['project_info']['project_id']
-          num = str(d['project_info']['project_number'])
-          bucket = d['project_info']['storage_bucket']
-          key = app = ''
-          for c in d['client']:
-              ci = c['client_info']
-              if ci['android_client_info']['package_name'] == 'com.murad.message_up':
-                  key = c['api_key'][0]['current_key']
-                  app = ci['mobilesdk_app_id']
-          assert key and app, 'google-services.json is missing api key or app id'
-          def opts(extra=''):
-              return ("FirebaseOptions(apiKey: '%s', appId: '%s', messagingSenderId: '%s', projectId: '%s', storageBucket: '%s'%s)"
-                      % (key, app, num, pid, bucket, extra))
-          dart = "import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;\n"
-          dart += "import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;\n\n"
-          dart += "class DefaultFirebaseOptions {\n"
-          dart += "  static FirebaseOptions get currentPlatform {\n"
-          dart += "    if (kIsWeb) return web;\n"
-          dart += "    switch (defaultTargetPlatform) {\n"
-          dart += "      case TargetPlatform.android: return android;\n"
-          dart += "      case TargetPlatform.iOS: return ios;\n"
-          dart += "      case TargetPlatform.macOS: return macOS;\n"
-          dart += "      case TargetPlatform.windows: return windows;\n"
-          dart += "      default: throw UnsupportedError('Unsupported platform');\n"
-          dart += "    }\n  }\n\n"
-          ios = ", iosBundleId: 'com.murad.messageUp'"
-          dom = ", authDomain: '%s.firebaseapp.com'" % pid
-          dart += "  static const FirebaseOptions web = " + opts(dom) + ";\n"
-          dart += "  static const FirebaseOptions android = " + opts() + ";\n"
-          dart += "  static const FirebaseOptions ios = " + opts(ios) + ";\n"
-          dart += "  static const FirebaseOptions macOS = " + opts(ios) + ";\n"
-          dart += "  static const FirebaseOptions windows = " + opts(dom) + ";\n"
-          dart += "}\n"
-          open('lib/firebase_options.dart', 'w').write(dart)
-          print('firebase_options.dart generated for ' + pid)
+          import json, sys, os
+          src = 'google-services.json'
+          out = 'lib/firebase_options.dart'
+          if not os.path.exists(src):
+              print('google-services.json not in repo yet — keeping firebase_options.dart template (app will show Setup Needed screen).')
+              sys.exit(0)
+          with open(src) as f:
+              data = json.load(f)
+          info = data.get('project_info') or {}
+          project_id = info.get('project_id', '')
+          project_number = str(info.get('project_number', ''))
+          storage_bucket = info.get('storage_bucket', '')
+          api_key = ''
+          app_id = ''
+          for client in data.get('client', []):
+              cinfo = client.get('client_info') or {}
+              if cinfo.get('android_client_info', {}).get('package_name') == 'com.murad.message_up':
+                  keys = client.get('api_key') or []
+                  if keys:
+                      api_key = keys[0].get('current_key', '')
+                  app_id = cinfo.get('mobilesdk_app_id', '')
+                  break
+          missing = [n for n, v in [('project_id', project_id), ('project_number', project_number), ('storage_bucket', storage_bucket), ('api_key', api_key), ('mobilesdk_app_id', app_id)] if not v]
+          if missing:
+              print('STOP: google-services.json is missing: ' + ', '.join(missing) + '. Re-download it from Firebase Console (Project settings -> Android app) and upload again.')
+              sys.exit(1)
+          dart = []
+          dart.append('// GENERATED during the GitHub Actions build from google-services.json.')
+          dart.append('// Do not edit by hand — re-download google-services.json to change values.')
+          dart.append("import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;")
+          dart.append("import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;")
+          dart.append('')
+          dart.append('class DefaultFirebaseOptions {')
+          dart.append('  static FirebaseOptions get currentPlatform {')
+          dart.append('    if (kIsWeb) { return web; }')
+          dart.append('    switch (defaultTargetPlatform) {')
+          dart.append('      case TargetPlatform.android: return android;')
+          dart.append('      case TargetPlatform.iOS: return ios;')
+          dart.append('      case TargetPlatform.macOS: return macOS;')
+          dart.append('      case TargetPlatform.windows: return windows;')
+          dart.append('      case TargetPlatform.linux: throw UnsupportedError("DefaultFirebaseOptions have not been configured for linux.");')
+          dart.append('      default: throw UnsupportedError("DefaultFirebaseOptions are not supported for this platform.");')
+          dart.append('    }')
+          dart.append('  }')
+          dart.append('')
+          dart.append('  static const FirebaseOptions web = FirebaseOptions(')
+          dart.append("    apiKey: '" + api_key + "',")
+          dart.append("    appId: '" + app_id + "',")
+          dart.append("    messagingSenderId: '" + project_number + "',")
+          dart.append("    projectId: '" + project_id + "',")
+          dart.append("    authDomain: '" + project_id + ".firebaseapp.com',")
+          dart.append("    storageBucket: '" + storage_bucket + "',")
+          dart.append('  );')
+          dart.append('')
+          dart.append('  static const FirebaseOptions android = FirebaseOptions(')
+          dart.append("    apiKey: '" + api_key + "',")
+          dart.append("    appId: '" + app_id + "',")
+          dart.append("    messagingSenderId: '" + project_number + "',")
+          dart.append("    projectId: '" + project_id + "',")
+          dart.append("    storageBucket: '" + storage_bucket + "',")
+          dart.append('  );')
+          dart.append('')
+          dart.append('  static const FirebaseOptions ios = FirebaseOptions(')
+          dart.append("    apiKey: '" + api_key + "',")
+          dart.append("    appId: '" + app_id + "',")
+          dart.append("    messagingSenderId: '" + project_number + "',")
+          dart.append("    projectId: '" + project_id + "',")
+          dart.append("    storageBucket: '" + storage_bucket + "',")
+          dart.append("    iosBundleId: 'com.murad.messageUp',")
+          dart.append('  );')
+          dart.append('')
+          dart.append('  static const FirebaseOptions macOS = FirebaseOptions(')
+          dart.append("    apiKey: '" + api_key + "',")
+          dart.append("    appId: '" + app_id + "',")
+          dart.append("    messagingSenderId: '" + project_number + "',")
+          dart.append("    projectId: '" + project_id + "',")
+          dart.append("    storageBucket: '" + storage_bucket + "',")
+          dart.append("    iosBundleId: 'com.murad.messageUp',")
+          dart.append('  );')
+          dart.append('')
+          dart.append('  static const FirebaseOptions windows = FirebaseOptions(')
+          dart.append("    apiKey: '" + api_key + "',")
+          dart.append("    appId: '" + app_id + "',")
+          dart.append("    messagingSenderId: '" + project_number + "',")
+          dart.append("    projectId: '" + project_id + "',")
+          dart.append("    authDomain: '" + project_id + ".firebaseapp.com',")
+          dart.append("    storageBucket: '" + storage_bucket + "',")
+          dart.append('  );')
+          dart.append('}')
+          dart.append('')
+          with open(out, 'w') as f:
+              f.write('\n'.join(dart))
+          print('firebase_options.dart generated from google-services.json for project ' + project_id)
           PY
 
-      - run: flutter pub get
+      - name: Google Sign-In config (default_web_client_id etc.)
+        run: |
+          python3 - <<'PY'
+          import json, subprocess, sys, os
+          PKG = 'com.murad.message_up'
+          data = json.load(open('google-services.json'))
+          info = data.get('project_info') or {}
+          client = None
+          for c in data.get('client', []):
+              if (c.get('client_info') or {}).get('android_client_info', {}).get('package_name') == PKG:
+                  client = c
+                  break
+          if client is None:
+              print('::error::google-services.json has no Android app for ' + PKG + '. In Firebase add an Android app with exactly this package name.')
+              sys.exit(1)
+          # Web client id (client_type 3) is what google_sign_in needs.
+          web = ''
+          for oc in client.get('oauth_client', []) or []:
+              if oc.get('client_type') == 3:
+                  web = oc.get('client_id', '')
+                  break
+          if not web:
+              other = (((client.get('services') or {}).get('appinvite_service') or {}).get('other_platform_oauth_client')) or []
+              for oc in other:
+                  if oc.get('client_type') == 3:
+                      web = oc.get('client_id', '')
+                      break
+          if not web:
+              print('::error::No web client id in google-services.json. Fix: Firebase -> Authentication -> Sign-in method -> turn Google ON and Save; add the SHA-1; then re-download google-services.json and upload it to the repo root.')
+              sys.exit(1)
+          # Check the permanent SHA-1 is registered (warning only).
+          out = subprocess.run(['keytool','-list','-v','-keystore',os.path.expanduser('~/.android/debug.keystore'),'-alias','androiddebugkey','-storepass','android'], capture_output=True, text=True).stdout
+          sha1 = ''
+          for line in out.splitlines():
+              if 'SHA1:' in line:
+                  sha1 = line.split('SHA1:')[1].strip().replace(':','').lower()
+          hashes = []
+          for oc in client.get('oauth_client', []) or []:
+              ai = oc.get('android_info') or {}
+              if ai.get('certificate_hash'):
+                  hashes.append(ai['certificate_hash'].lower())
+          if sha1 and sha1 not in hashes:
+              print('::warning::This build SHA-1 is NOT inside google-services.json. Add it in Firebase (Project settings -> Android app -> SHA certificate fingerprints), re-download google-services.json, upload to repo root, build again.')
+          else:
+              print('SHA-1 found in google-services.json - good.')
+          api_key = ''
+          for k in client.get('api_key', []) or []:
+              api_key = k.get('current_key', '')
+              break
+          def esc(v):
+              return str(v).replace("'", "\\'").replace('&', '&amp;').replace('<', '&lt;')
+          items = [
+              ('default_web_client_id', web),
+              ('google_app_id', (client.get('client_info') or {}).get('mobilesdk_app_id', '')),
+              ('gcm_defaultSenderId', info.get('project_number', '')),
+              ('google_api_key', api_key),
+              ('google_crash_reporting_api_key', api_key),
+              ('project_id', info.get('project_id', '')),
+              ('google_storage_bucket', info.get('storage_bucket', '')),
+          ]
+          d = 'android/app/src/main/res/values'
+          os.makedirs(d, exist_ok=True)
+          with open(d + '/google_signin_config.xml', 'w') as f:
+              f.write('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n')
+              for n, v in items:
+                  f.write('    <string name="%s" translatable="false">%s</string>\n' % (n, esc(v)))
+              f.write('</resources>\n')
+          r = 'android/app/src/main/res/raw'
+          os.makedirs(r, exist_ok=True)
+          with open(r + '/keep.xml', 'w') as f:
+              f.write('<?xml version="1.0" encoding="utf-8"?>\n<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@string/default_web_client_id,@string/google_app_id,@string/gcm_defaultSenderId,@string/google_api_key,@string/project_id,@string/google_storage_bucket" />\n')
+          print('Google Sign-In resources written. web client id ends with: ' + web[-30:])
+          PY
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyse (notes only, never blocks the build)
+        run: flutter analyze || true
 
       - name: Build release APK
         run: flutter build apk --release
 
-      - uses: actions/upload-artifact@v4
+      - name: Print signing key SHA-1 (always the same now)
+        # MUST run AFTER the build (the build creates the keystore).
+        # With the permanent key this is ALWAYS the same SHA-1
+        # (1B:7F:77:32:...:57:86:A5). Add it to Firebase once.
+        run: |
+          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android 2>/dev/null | grep -E "SHA1|SHA-256" || echo "SHA-1 not printed — keystore not found yet"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
-          name: message-up-apk
+          name: app-release
           path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+          
