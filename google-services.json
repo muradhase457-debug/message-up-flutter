@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "986163719160-4tgalargjmo6por4tgcl2h703tqlg76b.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.murad.message_up",
+            "certificate_hash": "a2d583fa55c79ced210b98a412b1a35fdac6bf68"
+          }
+        },
+        {
           "client_id": "986163719160-9rmrgj796962tipnelci6s9pqv34c2h2.apps.googleusercontent.com",
           "client_type": 3
         }
