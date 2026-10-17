@@ -1,3 +1,4 @@
+# VERSION v3 - has the step "Re-sign APK with the permanent key" (apksigner)
 # Message Up - GitHub Actions build (v2: permanent key + Google Sign-In fix).
 #
 # WHAT CHANGED vs v1
@@ -23,7 +24,7 @@ on:
 jobs:
   build-apk:
     name: Build release APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -229,7 +230,7 @@ jobs:
           if sha1 and sha1 not in hashes:
               print('::warning::This build SHA-1 is NOT inside google-services.json. Add it in Firebase (Project settings -> Android app -> SHA certificate fingerprints), re-download google-services.json, upload to repo root, build again.')
           else:
-              print('SHA-1 found in google-services.json - good.')
+              print('SHA-1 of the permanent key is in google-services.json - good.')
           api_key = ''
           for k in client.get('api_key', []) or []:
               api_key = k.get('current_key', '')
@@ -268,18 +269,29 @@ jobs:
       - name: Build release APK
         run: flutter build apk --release
 
-      - name: Print signing key SHA-1 (always the same now)
-        # MUST run AFTER the build (the build creates the keystore).
-        # With the permanent key this is ALWAYS the same SHA-1
-        # (1B:7F:77:32:...:57:86:A5). Add it to Firebase once.
+      - name: Re-sign APK with the permanent key
+        # Gradle may sign with its own fresh debug key (it did in build #5/#6),
+        # so we sign the finished APK ourselves with apksigner. This makes the
+        # SHA-1 always the same, whatever Gradle does.
         run: |
-          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android 2>/dev/null | grep -E "SHA1|SHA-256" || echo "SHA-1 not printed — keystore not found yet"
+          APKSIGNER=$(ls -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          if [ -z "$APKSIGNER" ]; then echo "::error::apksigner not found in Android build-tools"; exit 1; fi
+          echo "Using $APKSIGNER"
+          cd build/app/outputs/flutter-apk
+          "$APKSIGNER" sign --ks "$HOME/.android/debug.keystore" --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --out app-release-signed.apk app-release.apk
+          echo "=== Certificate of the FINAL apk (add this SHA-1 in Firebase) ==="
+          "$APKSIGNER" verify --print-certs app-release-signed.apk | grep -E "SHA-1|SHA-256"
+          if ! "$APKSIGNER" verify --print-certs app-release-signed.apk | grep -q "1b7f77325b3b2e17f906176e9224f4300a5786a5"; then
+            echo "::error::Final APK is NOT signed with the permanent key (expected SHA-1 1B:7F:77:32:...:57:86:A5). Check the DEBUG_KEYSTORE_BASE64 secret."
+            exit 1
+          fi
+          echo "OK: final APK is signed with the permanent key."
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-release
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: build/app/outputs/flutter-apk/app-release-signed.apk
           if-no-files-found: error
 
           
