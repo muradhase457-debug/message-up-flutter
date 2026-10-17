@@ -1,0 +1,203 @@
+# Message Up — FREE GitHub Actions build (no Codemagic, no card, no billing).
+#
+# HOW IT WORKS (for the owner):
+# 1. Upload this file to GitHub at exactly:  .github/workflows/build.yml
+#    (GitHub web -> Add file -> Create new file -> name box =
+#    .github/workflows/build.yml -> paste this whole file -> Commit.)
+# 2. The commit itself STARTS the build automatically (push trigger below).
+#    No button to press, no Codemagic.
+# 3. Wait ~10-20 min, then: GitHub repo -> Actions tab -> newest run ->
+#    "Build release APK" -> Artifacts -> app-release.apk -> download.
+# 4. IMPORTANT — SHA-1: every GitHub run uses a FRESH runner, so its debug
+#    keystore (and SHA-1) is DIFFERENT from Codemagic's and from the last
+#    run. After the run finishes, open the run log step
+#    "Print debug keystore SHA-1", copy the SHA1 line into Firebase
+#    Console -> Project settings -> Android app -> SHA certificate
+#    fingerprints (delete the old one, add the new one) -> Save -> wait
+#    ~5 min -> install the APK -> try login. Without this, Google Sign-In
+#    will not recognise the APK.
+# 5. Public repos build FREE on GitHub-hosted runners. No secrets are used
+#    anywhere in this file; google-services.json already lives in the repo.
+name: Build Message Up APK (free, GitHub Actions)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    name: Build release APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17 (Flutter needs it)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate missing Android scaffold (safe, keeps lib/ + pubspec)
+        run: flutter create --org com.murad --project-name message_up --platforms=android .
+
+      - name: Force compileSdk 36 for every Android module
+        # Same fix as the Codemagic build had: firebase_auth 4.x pins
+        # compileSdk 33, but its AndroidX helpers need 36. This init script
+        # sets BOTH the old (compileSdkVersion) and new (compileSdk) forms.
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/compile-sdk.gradle <<'EOF'
+          allprojects {
+              afterEvaluate { project ->
+                  if (project.hasProperty('android')) {
+                      try {
+                          project.android.compileSdkVersion 36
+                      } catch (Exception ignored) {
+                      }
+                      try {
+                          project.android.compileSdk = 36
+                      } catch (Exception ignored) {
+                      }
+                  }
+              }
+          }
+          EOF
+          echo "compileSdk override installed"
+
+      - name: Copy google-services.json into android/app
+        run: |
+          if [ -f google-services.json ]; then cp google-services.json android/app/google-services.json && echo "google-services.json copied"; else echo "google-services.json not at repo root yet"; exit 1; fi
+
+      - name: Generate firebase_options.dart from google-services.json
+        # Same auto-generation the Codemagic build used: reads the repo-root
+        # google-services.json and writes lib/firebase_options.dart with the
+        # real values before compiling — nobody copies any key by hand.
+        run: |
+          python3 - <<'PY'
+          import json, sys, os
+          src = 'google-services.json'
+          out = 'lib/firebase_options.dart'
+          if not os.path.exists(src):
+              print('google-services.json not in repo yet — keeping firebase_options.dart template (app will show Setup Needed screen).')
+              sys.exit(0)
+          with open(src) as f:
+              data = json.load(f)
+          info = data.get('project_info') or {}
+          project_id = info.get('project_id', '')
+          project_number = str(info.get('project_number', ''))
+          storage_bucket = info.get('storage_bucket', '')
+          api_key = ''
+          app_id = ''
+          for client in data.get('client', []):
+              cinfo = client.get('client_info') or {}
+              if cinfo.get('android_client_info', {}).get('package_name') == 'com.murad.message_up':
+                  keys = client.get('api_key') or []
+                  if keys:
+                      api_key = keys[0].get('current_key', '')
+                  app_id = cinfo.get('mobilesdk_app_id', '')
+                  break
+          missing = [n for n, v in [('project_id', project_id), ('project_number', project_number), ('storage_bucket', storage_bucket), ('api_key', api_key), ('mobilesdk_app_id', app_id)] if not v]
+          if missing:
+              print('STOP: google-services.json is missing: ' + ', '.join(missing) + '. Re-download it from Firebase Console (Project settings -> Android app) and upload again.')
+              sys.exit(1)
+          dart = []
+          dart.append('// GENERATED during the GitHub Actions build from google-services.json.')
+          dart.append('// Do not edit by hand — re-download google-services.json to change values.')
+          dart.append("import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;")
+          dart.append("import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;")
+          dart.append('')
+          dart.append('class DefaultFirebaseOptions {')
+          dart.append('  static FirebaseOptions get currentPlatform {')
+          dart.append('    if (kIsWeb) { return web; }')
+          dart.append('    switch (defaultTargetPlatform) {')
+          dart.append('      case TargetPlatform.android: return android;')
+          dart.append('      case TargetPlatform.iOS: return ios;')
+          dart.append('      case TargetPlatform.macOS: return macOS;')
+          dart.append('      case TargetPlatform.windows: return windows;')
+          dart.append('      case TargetPlatform.linux: throw UnsupportedError("DefaultFirebaseOptions have not been configured for linux.");')
+          dart.append('      default: throw UnsupportedError("DefaultFirebaseOptions are not supported for this platform.");')
+          dart.append('    }')
+          dart.append('  }')
+          dart.append('')
+          dart.append('  static const FirebaseOptions web = FirebaseOptions(')
+          dart.append("    apiKey: '" + api_key + "',")
+          dart.append("    appId: '" + app_id + "',")
+          dart.append("    messagingSenderId: '" + project_number + "',")
+          dart.append("    projectId: '" + project_id + "',")
+          dart.append("    authDomain: '" + project_id + ".firebaseapp.com',")
+          dart.append("    storageBucket: '" + storage_bucket + "',")
+          dart.append('  );')
+          dart.append('')
+          dart.append('  static const FirebaseOptions android = FirebaseOptions(')
+          dart.append("    apiKey: '" + api_key + "',")
+          dart.append("    appId: '" + app_id + "',")
+          dart.append("    messagingSenderId: '" + project_number + "',")
+          dart.append("    projectId: '" + project_id + "',")
+          dart.append("    storageBucket: '" + storage_bucket + "',")
+          dart.append('  );')
+          dart.append('')
+          dart.append('  static const FirebaseOptions ios = FirebaseOptions(')
+          dart.append("    apiKey: '" + api_key + "',")
+          dart.append("    appId: '" + app_id + "',")
+          dart.append("    messagingSenderId: '" + project_number + "',")
+          dart.append("    projectId: '" + project_id + "',")
+          dart.append("    storageBucket: '" + storage_bucket + "',")
+          dart.append("    iosBundleId: 'com.murad.messageUp',")
+          dart.append('  );')
+          dart.append('')
+          dart.append('  static const FirebaseOptions macOS = FirebaseOptions(')
+          dart.append("    apiKey: '" + api_key + "',")
+          dart.append("    appId: '" + app_id + "',")
+          dart.append("    messagingSenderId: '" + project_number + "',")
+          dart.append("    projectId: '" + project_id + "',")
+          dart.append("    storageBucket: '" + storage_bucket + "',")
+          dart.append("    iosBundleId: 'com.murad.messageUp',")
+          dart.append('  );')
+          dart.append('')
+          dart.append('  static const FirebaseOptions windows = FirebaseOptions(')
+          dart.append("    apiKey: '" + api_key + "',")
+          dart.append("    appId: '" + app_id + "',")
+          dart.append("    messagingSenderId: '" + project_number + "',")
+          dart.append("    projectId: '" + project_id + "',")
+          dart.append("    authDomain: '" + project_id + ".firebaseapp.com',")
+          dart.append("    storageBucket: '" + storage_bucket + "',")
+          dart.append('  );')
+          dart.append('}')
+          dart.append('')
+          with open(out, 'w') as f:
+              f.write('\n'.join(dart))
+          print('firebase_options.dart generated from google-services.json for project ' + project_id)
+          PY
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyse (notes only, never blocks the build)
+        run: flutter analyze || true
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Print debug keystore SHA-1 (copy into Firebase Console)
+        # MUST run AFTER the build (the build creates the keystore).
+        # Copy the SHA1 line into Firebase Console -> Project settings ->
+        # Android app -> SHA certificate fingerprints (delete the old one,
+        # add this one) -> Save. Each GitHub run has a different SHA-1.
+        run: |
+          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android 2>/dev/null | grep -E "SHA1|SHA-256" || echo "SHA-1 not printed — keystore not found yet"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          
