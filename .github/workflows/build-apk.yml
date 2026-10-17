@@ -23,11 +23,11 @@ jobs:
       - name: Generate Android scaffold
         run: flutter create --org com.murad --project-name message_up --platforms=android .
 
-      - name: Install FIXED debug keystore
+      - name: Install fixed debug keystore
         run: |
           mkdir -p ~/.android
-          cp debug.keystore ~/.android/debug.keystore
-          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android | grep -E "SHA1|SHA-1"
+          echo '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' | base64 -d > ~/.android/debug.keystore
+          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android | grep SHA1
 
       - name: Force compileSdk 36
         run: |
@@ -47,7 +47,46 @@ jobs:
         run: cp google-services.json android/app/google-services.json
 
       - name: Generate firebase_options.dart
-        run: python3 gen_firebase_options.py
+        run: |
+          python3 - <<'PY'
+          import json
+          d = json.load(open('google-services.json'))
+          pid = d['project_info']['project_id']
+          num = str(d['project_info']['project_number'])
+          bucket = d['project_info']['storage_bucket']
+          key = app = ''
+          for c in d['client']:
+              ci = c['client_info']
+              if ci['android_client_info']['package_name'] == 'com.murad.message_up':
+                  key = c['api_key'][0]['current_key']
+                  app = ci['mobilesdk_app_id']
+          assert key and app, 'google-services.json is missing api key or app id'
+          def opts(extra=''):
+              return ("FirebaseOptions(apiKey: '%s', appId: '%s', messagingSenderId: '%s', projectId: '%s', storageBucket: '%s'%s)"
+                      % (key, app, num, pid, bucket, extra))
+          dart = "import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;\n"
+          dart += "import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;\n\n"
+          dart += "class DefaultFirebaseOptions {\n"
+          dart += "  static FirebaseOptions get currentPlatform {\n"
+          dart += "    if (kIsWeb) return web;\n"
+          dart += "    switch (defaultTargetPlatform) {\n"
+          dart += "      case TargetPlatform.android: return android;\n"
+          dart += "      case TargetPlatform.iOS: return ios;\n"
+          dart += "      case TargetPlatform.macOS: return macOS;\n"
+          dart += "      case TargetPlatform.windows: return windows;\n"
+          dart += "      default: throw UnsupportedError('Unsupported platform');\n"
+          dart += "    }\n  }\n\n"
+          ios = ", iosBundleId: 'com.murad.messageUp'"
+          dom = ", authDomain: '%s.firebaseapp.com'" % pid
+          dart += "  static const FirebaseOptions web = " + opts(dom) + ";\n"
+          dart += "  static const FirebaseOptions android = " + opts() + ";\n"
+          dart += "  static const FirebaseOptions ios = " + opts(ios) + ";\n"
+          dart += "  static const FirebaseOptions macOS = " + opts(ios) + ";\n"
+          dart += "  static const FirebaseOptions windows = " + opts(dom) + ";\n"
+          dart += "}\n"
+          open('lib/firebase_options.dart', 'w').write(dart)
+          print('firebase_options.dart generated for ' + pid)
+          PY
 
       - run: flutter pub get
 
