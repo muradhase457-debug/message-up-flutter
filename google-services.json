@@ -14,11 +14,11 @@
       },
       "oauth_client": [
         {
-          "client_id": "986163719160-4tgalargjmo6por4tgcl2h703tqlg76b.apps.googleusercontent.com",
+          "client_id": "986163719160-i15a3oanerqus3eo5gfj58mbdeltnmnh.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
             "package_name": "com.murad.message_up",
-            "certificate_hash": "a2d583fa55c79ced210b98a412b1a35fdac6bf68"
+            "certificate_hash": "1b7f77325b3b2e17f906176e9224f4300a5786a5"
           }
         },
         {
