@@ -1,23 +1,18 @@
-# Message Up — FREE GitHub Actions build (no Codemagic, no card, no billing).
+# Message Up - GitHub Actions build (v2: permanent key + Google Sign-In fix).
 #
-# HOW IT WORKS (for the owner):
-# 1. Upload this file to GitHub at exactly:  .github/workflows/build.yml
-#    (GitHub web -> Add file -> Create new file -> name box =
-#    .github/workflows/build.yml -> paste this whole file -> Commit.)
-# 2. The commit itself STARTS the build automatically (push trigger below).
-#    No button to press, no Codemagic.
-# 3. Wait ~10-20 min, then: GitHub repo -> Actions tab -> newest run ->
-#    "Build release APK" -> Artifacts -> app-release.apk -> download.
-# 4. IMPORTANT — SHA-1: every GitHub run uses a FRESH runner, so its debug
-#    keystore (and SHA-1) is DIFFERENT from Codemagic's and from the last
-#    run. After the run finishes, open the run log step
-#    "Print debug keystore SHA-1", copy the SHA1 line into Firebase
-#    Console -> Project settings -> Android app -> SHA certificate
-#    fingerprints (delete the old one, add the new one) -> Save -> wait
-#    ~5 min -> install the APK -> try login. Without this, Google Sign-In
-#    will not recognise the APK.
-# 5. Public repos build FREE on GitHub-hosted runners. No secrets are used
-#    anywhere in this file; google-services.json already lives in the repo.
+# WHAT CHANGED vs v1
+# 1. The APK is now signed with ONE permanent key (stored in the GitHub
+#    secret DEBUG_KEYSTORE_BASE64), so the SHA-1 never changes between builds.
+#    Permanent SHA-1:  1B:7F:77:32:5B:3B:2E:17:F9:06:17:6E:92:24:F4:30:0A:57:86:A5
+# 2. New step "Google Sign-In config" turns google-services.json into the
+#    Android string resources (default_web_client_id, google_app_id ...) that
+#    google_sign_in needs. Before, nothing created them, so login failed.
+#
+# ONE-TIME SETUP: GitHub repo -> Settings -> Secrets and variables -> Actions
+# -> New repository secret -> Name: DEBUG_KEYSTORE_BASE64 -> paste the long
+# text from keystore-secret.txt -> Add secret.
+# Then add the SHA-1 above in Firebase, re-download google-services.json,
+# upload it to the repo root, and commit this file. The commit starts a build.
 name: Build Message Up APK (free, GitHub Actions)
 
 on:
@@ -47,6 +42,19 @@ jobs:
 
       - name: Generate missing Android scaffold (safe, keeps lib/ + pubspec)
         run: flutter create --org com.murad --project-name message_up --platforms=android .
+
+      - name: Install permanent signing key
+        env:
+          KS_B64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "::error::GitHub secret DEBUG_KEYSTORE_BASE64 is missing. Add it (Settings -> Secrets and variables -> Actions)."
+            exit 1
+          fi
+          mkdir -p ~/.android
+          echo "$KS_B64" | base64 -d > ~/.android/debug.keystore
+          echo "Permanent key installed. Its SHA-1:"
+          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android 2>/dev/null | grep -E "SHA1" || { echo "::error::Keystore could not be read - the secret was pasted wrongly."; exit 1; }
 
       - name: Force compileSdk 36 for every Android module
         # Same fix as the Codemagic build had: firebase_auth 4.x pins
@@ -177,6 +185,80 @@ jobs:
           print('firebase_options.dart generated from google-services.json for project ' + project_id)
           PY
 
+      - name: Google Sign-In config (default_web_client_id etc.)
+        run: |
+          python3 - <<'PY'
+          import json, subprocess, sys, os
+          PKG = 'com.murad.message_up'
+          data = json.load(open('google-services.json'))
+          info = data.get('project_info') or {}
+          client = None
+          for c in data.get('client', []):
+              if (c.get('client_info') or {}).get('android_client_info', {}).get('package_name') == PKG:
+                  client = c
+                  break
+          if client is None:
+              print('::error::google-services.json has no Android app for ' + PKG + '. In Firebase add an Android app with exactly this package name.')
+              sys.exit(1)
+          # Web client id (client_type 3) is what google_sign_in needs.
+          web = ''
+          for oc in client.get('oauth_client', []) or []:
+              if oc.get('client_type') == 3:
+                  web = oc.get('client_id', '')
+                  break
+          if not web:
+              other = (((client.get('services') or {}).get('appinvite_service') or {}).get('other_platform_oauth_client')) or []
+              for oc in other:
+                  if oc.get('client_type') == 3:
+                      web = oc.get('client_id', '')
+                      break
+          if not web:
+              print('::error::No web client id in google-services.json. Fix: Firebase -> Authentication -> Sign-in method -> turn Google ON and Save; add the SHA-1; then re-download google-services.json and upload it to the repo root.')
+              sys.exit(1)
+          # Check the permanent SHA-1 is registered (warning only).
+          out = subprocess.run(['keytool','-list','-v','-keystore',os.path.expanduser('~/.android/debug.keystore'),'-alias','androiddebugkey','-storepass','android'], capture_output=True, text=True).stdout
+          sha1 = ''
+          for line in out.splitlines():
+              if 'SHA1:' in line:
+                  sha1 = line.split('SHA1:')[1].strip().replace(':','').lower()
+          hashes = []
+          for oc in client.get('oauth_client', []) or []:
+              ai = oc.get('android_info') or {}
+              if ai.get('certificate_hash'):
+                  hashes.append(ai['certificate_hash'].lower())
+          if sha1 and sha1 not in hashes:
+              print('::warning::This build SHA-1 is NOT inside google-services.json. Add it in Firebase (Project settings -> Android app -> SHA certificate fingerprints), re-download google-services.json, upload to repo root, build again.')
+          else:
+              print('SHA-1 found in google-services.json - good.')
+          api_key = ''
+          for k in client.get('api_key', []) or []:
+              api_key = k.get('current_key', '')
+              break
+          def esc(v):
+              return str(v).replace("'", "\\'").replace('&', '&amp;').replace('<', '&lt;')
+          items = [
+              ('default_web_client_id', web),
+              ('google_app_id', (client.get('client_info') or {}).get('mobilesdk_app_id', '')),
+              ('gcm_defaultSenderId', info.get('project_number', '')),
+              ('google_api_key', api_key),
+              ('google_crash_reporting_api_key', api_key),
+              ('project_id', info.get('project_id', '')),
+              ('google_storage_bucket', info.get('storage_bucket', '')),
+          ]
+          d = 'android/app/src/main/res/values'
+          os.makedirs(d, exist_ok=True)
+          with open(d + '/google_signin_config.xml', 'w') as f:
+              f.write('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n')
+              for n, v in items:
+                  f.write('    <string name="%s" translatable="false">%s</string>\n' % (n, esc(v)))
+              f.write('</resources>\n')
+          r = 'android/app/src/main/res/raw'
+          os.makedirs(r, exist_ok=True)
+          with open(r + '/keep.xml', 'w') as f:
+              f.write('<?xml version="1.0" encoding="utf-8"?>\n<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@string/default_web_client_id,@string/google_app_id,@string/gcm_defaultSenderId,@string/google_api_key,@string/project_id,@string/google_storage_bucket" />\n')
+          print('Google Sign-In resources written. web client id ends with: ' + web[-30:])
+          PY
+
       - name: Get dependencies
         run: flutter pub get
 
@@ -186,11 +268,10 @@ jobs:
       - name: Build release APK
         run: flutter build apk --release
 
-      - name: Print debug keystore SHA-1 (copy into Firebase Console)
+      - name: Print signing key SHA-1 (always the same now)
         # MUST run AFTER the build (the build creates the keystore).
-        # Copy the SHA1 line into Firebase Console -> Project settings ->
-        # Android app -> SHA certificate fingerprints (delete the old one,
-        # add this one) -> Save. Each GitHub run has a different SHA-1.
+        # With the permanent key this is ALWAYS the same SHA-1
+        # (1B:7F:77:32:...:57:86:A5). Add it to Firebase once.
         run: |
           keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android 2>/dev/null | grep -E "SHA1|SHA-256" || echo "SHA-1 not printed — keystore not found yet"
 
@@ -200,4 +281,5 @@ jobs:
           name: app-release
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
+
           
