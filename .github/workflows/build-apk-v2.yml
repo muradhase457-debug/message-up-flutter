@@ -44,6 +44,58 @@ jobs:
       - name: Generate missing Android scaffold (safe, keeps lib/ + pubspec)
         run: flutter create --org com.murad --project-name message_up --platforms=android .
 
+      - name: Add call permissions + minSdk 24 (WebRTC needs them)
+        # flutter_webrtc needs CAMERA + RECORD_AUDIO + MODIFY_AUDIO_SETTINGS
+        # in AndroidManifest, minSdk 24 in the app Gradle file, and
+        # camera/mic usage text in iOS Info.plist. The scaffold is
+        # regenerated every build, so this patches the fresh files.
+        # Idempotent: re-running skips anything already present.
+        run: |
+          python3 - <<'PY'
+          import os, re
+          # --- AndroidManifest.xml: call permissions ---
+          mpath = 'android/app/src/main/AndroidManifest.xml'
+          if os.path.exists(mpath):
+              s = open(mpath).read()
+              for perm in ('android.permission.CAMERA',
+                           'android.permission.RECORD_AUDIO',
+                           'android.permission.MODIFY_AUDIO_SETTINGS'):
+                  tag = '<uses-permission android:name="%s" />' % perm
+                  if perm not in s:
+                      # insert right after the opening <manifest ...> line
+                      s = re.sub(r'(<manifest[^>]*>)', r'\1\n    ' + tag, s, count=1)
+                      print('added permission ' + perm)
+              open(mpath, 'w').write(s)
+          # --- app Gradle: minSdk 24 (Kotlin DSL or Groovy) ---
+          for gpath in ('android/app/build.gradle.kts', 'android/app/build.gradle'):
+              if not os.path.exists(gpath):
+                  continue
+              s = open(gpath).read()
+              # Kotlin DSL: minSdk = flutter.minSdkVersion  ->  minSdk = 24
+              s2 = re.sub(r'minSdk\s*=\s*[^\n]+', 'minSdk = 24', s)
+              # Groovy: minSdkVersion 21 / minSdkVersion flutter.minSdkVersion
+              s2 = re.sub(r'minSdkVersion\s+[^\n]+', 'minSdkVersion 24', s2)
+              s2 = re.sub(r'minSdkVersion\s*=\s*[^\n]+',
+                          'minSdkVersion = 24', s2)
+              if s2 != s:
+                  open(gpath, 'w').write(s2)
+                  print('minSdk -> 24 in ' + gpath)
+          # --- iOS Info.plist: camera/mic usage text (future iOS builds) ---
+          ppath = 'ios/Runner/Info.plist'
+          if os.path.exists(ppath):
+              s = open(ppath).read()
+              add = ''
+              if 'NSCameraUsageDescription' not in s:
+                  add += '\t<key>NSCameraUsageDescription</key>\n\t<string>Video calls need camera access.</string>\n'
+              if 'NSMicrophoneUsageDescription' not in s:
+                  add += '\t<key>NSMicrophoneUsageDescription</key>\n\t<string>Voice and video calls need microphone access.</string>\n'
+              if add:
+                  s = s.replace('</dict>\n</plist>', add + '</dict>\n</plist>', 1)
+                  open(ppath, 'w').write(s)
+                  print('added iOS camera/mic usage text')
+          print('call permissions patch done')
+          PY
+
       - name: Install permanent signing key
         env:
           KS_B64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
