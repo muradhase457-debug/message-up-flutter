@@ -230,6 +230,7 @@ class CallEngine {
         if (_seenCandidates.contains(change.doc.id)) continue;
         _seenCandidates.add(change.doc.id);
         final data = change.doc.data();
+        if (data == null) continue;
         if (data['from'] == myUid) continue;
         final candidate = RTCIceCandidate(
           data['candidate'] as String?,
