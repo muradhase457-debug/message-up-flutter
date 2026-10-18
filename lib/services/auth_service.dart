@@ -67,27 +67,54 @@ class AuthService {
   }
 
   /// Create / update the `users/{uid}` profile after sign-in.
+  ///
+  /// A name / photo the user already set (in this app or on the website)
+  /// is NEVER overwritten by an empty Google value: only blank fields
+  /// are filled in. Online + lastSeen are always refreshed.
   Future<void> _upsertProfile(User user) async {
     final ref =
         _firestore.collection(AppConstants.usersCollection).doc(user.uid);
     final existing = await ref.get();
     if (existing.exists) {
-      await ref.update(<String, dynamic>{
-        'displayName': user.displayName ?? '',
+      final data = existing.data() ?? <String, dynamic>{};
+      final oldName = _firstString(data, const ['displayName', 'name']);
+      final oldPhoto = _firstString(
+          data, const ['photoUrl', 'photoURL', 'photo', 'avatar']);
+      final googleName = (user.displayName ?? '').trim();
+      final googlePhoto = user.photoURL ?? '';
+      final updates = <String, dynamic>{
         'email': user.email ?? '',
-        'photoUrl': user.photoURL ?? '',
         'online': true,
         'lastSeen': FieldValue.serverTimestamp(),
-      });
+      };
+      // Fill blanks only — never wipe a name/photo the user already has.
+      if (oldName.isEmpty && googleName.isNotEmpty) {
+        updates['displayName'] = googleName;
+      }
+      if (oldPhoto.isEmpty && googlePhoto.isNotEmpty) {
+        updates['photoUrl'] = googlePhoto;
+      }
+      await ref.update(updates);
     } else {
       await ref.set(ChatUser(
         uid: user.uid,
-        displayName: user.displayName ?? 'Message Up user',
+        displayName: (user.displayName ?? '').trim().isEmpty
+            ? 'Message Up user'
+            : user.displayName!,
         email: user.email ?? '',
         photoUrl: user.photoURL ?? '',
         online: true,
       ).toMap());
     }
+  }
+
+  static String _firstString(
+      Map<String, dynamic> map, List<String> keys) {
+    for (final key in keys) {
+      final value = map[key];
+      if (value is String && value.isNotEmpty) return value;
+    }
+    return '';
   }
 
   Future<void> _setOnline(bool online) async {
@@ -106,13 +133,18 @@ class AuthService {
     }
   }
 
-  /// Update the signed-in user's display name / about text.
-  Future<void> updateProfile({String? displayName, String? about}) async {
+  /// Update the signed-in user's display name / about text / photo.
+  Future<void> updateProfile({
+    String? displayName,
+    String? about,
+    String? photoUrl,
+  }) async {
     final uid = currentUid;
     if (uid == null) return;
     final updates = <String, dynamic>{};
     if (displayName != null) updates['displayName'] = displayName;
     if (about != null) updates['about'] = about;
+    if (photoUrl != null) updates['photoUrl'] = photoUrl;
     if (updates.isEmpty) return;
     await _firestore
         .collection(AppConstants.usersCollection)

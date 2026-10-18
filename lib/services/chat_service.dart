@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:message_up/models/chat_model.dart';
 import 'package:message_up/models/message_model.dart';
 import 'package:message_up/utils/constants.dart';
@@ -117,18 +120,37 @@ class ChatService {
   /// Mark every message in a chat as delivered+read for [myUid], and
   /// reset my unread counter. Call when opening a chat / on new messages
   /// while the chat is open.
+  ///
+  /// Seen-state is written in BOTH formats so the app and the website
+  /// agree: the website reads `lastRead.{uid}` on the chat doc, the app
+  /// also reads per-message `read`/`readBy`. Only messages newer than my
+  /// last `lastRead` stamp are rewritten, so an already-read chat costs
+  /// no writes at all.
   Future<void> markRead(String chatId, String myUid) async {
+    final chatSnap = await _chats.doc(chatId).get();
+    final chatData = chatSnap.data() ?? <String, dynamic>{};
+    final rawLastRead = chatData['lastRead'];
+    DateTime? myLastRead;
+    if (rawLastRead is Map) {
+      myLastRead = _toDate(rawLastRead[myUid]);
+    }
     // Single-field query + client-side filter: combining `!=` with `==`
     // on another field would need a composite Firestore index.
     final snap = await _messagesOf(chatId)
         .where('senderId', isNotEqualTo: myUid)
         .limit(100)
         .get();
-    final unread =
-        snap.docs.where((d) => (d.data()['read'] as bool?) != true).toList();
-    if (unread.isEmpty) return; // also stops a snapshot → write → snapshot loop
+    final toMark = snap.docs.where((d) {
+      if ((d.data()['read'] as bool?) == true) return false;
+      final created = _toDate(d.data()['createdAt']);
+      if (created == null) return true;
+      return myLastRead == null || created.isAfter(myLastRead);
+    }).toList();
+    if (toMark.isEmpty && myLastRead != null) {
+      return; // nothing new — no write, no snapshot loop
+    }
     final batch = _firestore.batch();
-    for (final doc in unread) {
+    for (final doc in toMark) {
       batch.update(doc.reference, <String, dynamic>{
         'delivered': true,
         'read': true,
@@ -137,6 +159,7 @@ class ChatService {
     }
     batch.update(_chats.doc(chatId), <String, dynamic>{
       'unread.$myUid': 0,
+      'lastRead.$myUid': FieldValue.serverTimestamp(),
     });
     await batch.commit();
   }
@@ -252,6 +275,51 @@ class ChatService {
       'text': '',
       'imageUrl': null,
     });
+  }
+
+  /// Upload a chat photo to Firebase Storage (NO Cloudinary account
+  /// needed — Storage is part of the same Firebase project) and return
+  /// its download URL. The caller then sends it with [sendMessage].
+  Future<String> uploadChatImage({
+    required String chatId,
+    required File file,
+    required String myUid,
+  }) async {
+    final name =
+        '${DateTime.now().millisecondsSinceEpoch}_$myUid.jpg';
+    final ref = FirebaseStorage.instance.ref('chat_images/$chatId/$name');
+    await ref.putFile(file);
+    return ref.getDownloadURL();
+  }
+
+  /// Upload a profile photo to Firebase Storage and return its URL.
+  Future<String> uploadProfilePhoto({
+    required File file,
+    required String myUid,
+  }) async {
+    final ref =
+        FirebaseStorage.instance.ref('profile_photos/$myUid.jpg');
+    await ref.putFile(file);
+    return ref.getDownloadURL();
+  }
+
+  /// Upload a status photo to Firebase Storage and return its URL.
+  Future<String> uploadStatusImage({
+    required File file,
+    required String myUid,
+  }) async {
+    final name =
+        '${DateTime.now().millisecondsSinceEpoch}_$myUid.jpg';
+    final ref =
+        FirebaseStorage.instance.ref('status_images/$myUid/$name');
+    await ref.putFile(file);
+    return ref.getDownloadURL();
+  }
+
+  static DateTime? _toDate(dynamic value) {
+    if (value is Timestamp) return value.toDate();
+    if (value is DateTime) return value;
+    return null;
   }
 
   /// Delete messages whose [expiresAt] has passed (disappearing messages).
