@@ -92,19 +92,25 @@ class ChatService {
     final memberList = members is List
         ? members.map((e) => e.toString()).toList()
         : <String>[];
+    // Nested map (NOT dotted keys): set(merge:true) treats dotted keys as
+    // literal field names, which silently broke the unread counters.
     final unread = <String, dynamic>{};
     for (final m in memberList) {
-      if (m != senderId) unread['unreadCounts.$m'] = FieldValue.increment(1);
+      if (m != senderId) unread[m] = FieldValue.increment(1);
     }
     await _messagesOf(chatId).add(message.toMap());
     // set(merge:true) — NOT update: update() throws if the chat document
     // does not exist yet, set(merge:true) creates it instead. No crash
     // for a stale / deleted chatId.
+    // Written in the website-compatible format: lastMessage = {text, senderId},
+    // unread = {uid: n}, updatedAt = time.
+    final preview = trimmed.isEmpty ? '📷 Photo' : trimmed;
     await chatRef.set(<String, dynamic>{
-      'lastMessage': trimmed.isEmpty ? '📷 Photo' : trimmed,
+      'lastMessage': <String, dynamic>{'text': preview, 'senderId': senderId},
       'lastMessageAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
       'lastSenderId': senderId,
-      ...unread,
+      if (unread.isNotEmpty) 'unread': unread,
     }, SetOptions(merge: true));
   }
 
@@ -130,7 +136,7 @@ class ChatService {
       });
     }
     batch.update(_chats.doc(chatId), <String, dynamic>{
-      'unreadCounts.$myUid': 0,
+      'unread.$myUid': 0,
     });
     await batch.commit();
   }
@@ -164,7 +170,7 @@ class ChatService {
         .get();
     for (final doc in existing.docs) {
       final data = doc.data();
-      if ((data['isGroup'] as bool?) == true) continue;
+      if (data['isGroup'] == true) continue;
       final members = (doc.data()['members'] as List?)
               ?.map((e) => e.toString())
               .toList() ??
@@ -173,11 +179,20 @@ class ChatService {
         return doc.id;
       }
     }
-    final ref = await _chats.add(Chat(
-      id: '',
-      members: <String>[myUid, otherUid],
-      isGroup: false,
-    ).toMap());
+    // Same id scheme as the website: both uids sorted and joined by "_".
+    final ids = <String>[myUid, otherUid]..sort();
+    final ref = _chats.doc(ids.join('_'));
+    final snap = await ref.get();
+    if (!snap.exists) {
+      await ref.set(<String, dynamic>{
+        'members': ids,
+        'isGroup': false,
+        'lastMessage': null,
+        'unread': <String, dynamic>{myUid: 0, otherUid: 0},
+        'updatedAt': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
     return ref.id;
   }
 
@@ -188,12 +203,17 @@ class ChatService {
     required String title,
   }) async {
     final members = <String>{myUid, ...memberUids}.toList();
-    final ref = await _chats.add(Chat(
-      id: '',
-      members: members,
-      isGroup: true,
-      title: title,
-    ).toMap());
+    final ref = await _chats.add(<String, dynamic>{
+      'members': members,
+      'isGroup': true,
+      'title': title,
+      'name': title,
+      'createdBy': myUid,
+      'lastMessage': null,
+      'unread': <String, dynamic>{},
+      'updatedAt': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
+    });
     return ref.id;
   }
 
