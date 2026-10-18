@@ -32,16 +32,41 @@ class ChatUser {
   }
 
   factory ChatUser.fromMap(String uid, Map<String, dynamic> map) {
+    // The WEBSITE (index.html) and this app share `users` docs but write
+    // different field names. Read EVERY variant so a name/photo set on
+    // the website shows up here (and vice versa) instead of '?':
+    //   name:  displayName (app) | name (website) | username
+    //   photo: photoUrl (app)    | photoURL (website) | photo | avatar
+    //   about: about (app)       | bio | status
+    //   online: online | isOnline ; lastSeen: lastSeen | lastActive
     return ChatUser(
       uid: uid,
-      displayName: (map['displayName'] as String?) ?? '',
+      displayName: _firstString(map, const [
+        'displayName',
+        'name',
+        'username',
+      ]),
       email: (map['email'] as String?) ?? '',
-      photoUrl: (map['photoUrl'] as String?) ?? '',
-      about: (map['about'] as String?) ?? '',
-      online: (map['online'] as bool?) ?? false,
-      lastSeen: _toDate(map['lastSeen']),
+      photoUrl: _firstString(map, const [
+        'photoUrl',
+        'photoURL',
+        'photo',
+        'avatar',
+      ]),
+      about: _firstString(map, const ['about', 'bio', 'status']),
+      online: (map['online'] as bool?) ?? (map['isOnline'] as bool?) ?? false,
+      lastSeen: _toDate(map['lastSeen']) ?? _toDate(map['lastActive']),
       blocked: (map['blocked'] as bool?) ?? false,
     );
+  }
+
+  /// First non-empty string among [keys], or '' when none is set.
+  static String _firstString(Map<String, dynamic> map, List<String> keys) {
+    for (final key in keys) {
+      final value = map[key];
+      if (value is String && value.isNotEmpty) return value;
+    }
+    return '';
   }
 
   factory ChatUser.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {

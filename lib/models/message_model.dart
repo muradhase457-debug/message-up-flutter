@@ -99,7 +99,12 @@ class Message {
     };
   }
 
-  Message copyWith({bool? starred, bool? deleted}) {
+  Message copyWith({
+    bool? starred,
+    bool? deleted,
+    bool? delivered,
+    bool? read,
+  }) {
     return Message(
       id: id,
       chatId: chatId,
@@ -115,8 +120,8 @@ class Message {
       deleted: deleted ?? this.deleted,
       createdAt: createdAt,
       expiresAt: expiresAt,
-      delivered: delivered,
-      read: read,
+      delivered: delivered ?? this.delivered,
+      read: read ?? this.read,
       readBy: readBy,
     );
   }

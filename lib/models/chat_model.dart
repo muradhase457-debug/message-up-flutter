@@ -23,6 +23,11 @@ class Chat {
   final int? disappearingSeconds;
   final DateTime? createdAt;
 
+  /// When each member last opened this chat (the website's seen-state).
+  /// The website writes `lastRead.{uid} = serverTimestamp()`; ticks are
+  /// computed from this map, NOT from per-message fields.
+  final Map<String, DateTime> lastRead;
+
   const Chat({
     required this.id,
     required this.members,
@@ -38,19 +43,23 @@ class Chat {
     this.blocked = false,
     this.disappearingSeconds,
     this.createdAt,
+    this.lastRead = const <String, DateTime>{},
   });
 
   int unreadFor(String uid) => unreadCounts[uid] ?? 0;
 
   /// Title shown in the list: group title, or the other member's name
-  /// (resolved by the UI from the users map).
+  /// (resolved by the UI from the users map). An empty resolved name
+  /// falls back to 'Chat' — never a blank row.
   String displayTitle(String myUid, Map<String, String> namesByUid) {
     if (isGroup && title.isNotEmpty) return title;
     final other = members.firstWhere(
       (m) => m != myUid,
       orElse: () => members.isNotEmpty ? members.first : '',
     );
-    return namesByUid[other] ?? (title.isNotEmpty ? title : 'Chat');
+    final name = namesByUid[other] ?? '';
+    if (name.isNotEmpty) return name;
+    return title.isNotEmpty ? title : 'Chat';
   }
 
   // ---- safe readers: never throw, whatever type Firestore returns ----
@@ -92,6 +101,16 @@ class Chat {
     var title = _str(map['title']);
     if (title.isEmpty) title = _str(map['name']);
 
+    // lastRead: {uid: Timestamp} — the website's seen-state.
+    final lastRead = <String, DateTime>{};
+    final rawLastRead = map['lastRead'];
+    if (rawLastRead is Map) {
+      rawLastRead.forEach((k, v) {
+        final dt = _toDate(v);
+        if (dt != null) lastRead[k.toString()] = dt;
+      });
+    }
+
     return Chat(
       id: id,
       members: members,
@@ -107,6 +126,7 @@ class Chat {
       blocked: _bool(map['blocked']),
       disappearingSeconds: _int(map['disappearingSeconds']),
       createdAt: _toDate(map['createdAt']) ?? _toDate(map['updatedAt']),
+      lastRead: lastRead,
     );
   }
 
