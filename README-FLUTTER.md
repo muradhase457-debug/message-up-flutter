@@ -2,7 +2,7 @@
 
 **Eita website na, TWA na — pure native Flutter app.** Play Store-e jabe AAB hishebe, phone-e real app-er moto cholbe: fast, smooth, offline-friendly.
 
-> ⚠️ Honest kotha: web version-er 40+ feature shob ekbare ei prothom native cut-e ana hoy nai. Core jinish — auth, chats, messages, ticks, status, feed, profile, settings, admin — shotti + Firestore-e wired. Calls screen ekhon UI + wiring TODO (niche dekho). Baki web feature gula porer cut-e ashbe, ekta ekta kore, test kore.
+> ⚠️ Honest kotha: web version-er 40+ feature shob ekbare ei prothom native cut-e ana hoy nai. Core jinish — auth, chats, messages, ticks, status, feed, profile, settings, admin — shotti + Firestore-e wired. Calls (2026-10-18 update): REAL 1:1 voice/video call — `flutter_webrtc` + Firestore signalling (`calls/{callId}` + `candidates` subcollection). Group call ekhono nai (1:1 matro). Baki web feature gula porer cut-e ashbe, ekta ekta kore, test kore.
 
 ---
 
@@ -19,7 +19,8 @@
 
 ## Ki TODO (build bhangbe na)
 
-- **Calls (WebRTC):** `lib/screens/calls_screen.dart`-er header-e full wiring steps lekha ache — `flutter_webrtc` add kora, Firestore signalling (`calls/{callId}`), permission handling. Ekhn UI preview matro.
+- **Group calls:** 1:1 call chole; group call ekhono nai.
+- **Forward picker:** chat list theke target chat beche forward kora jay.
 - **Forward target picker:** chat list theke target choose kora — next cut.
 - **Photo status / image messages:** `image_picker` + Firebase Storage already pubspec-e ache, wiring next cut.
 
