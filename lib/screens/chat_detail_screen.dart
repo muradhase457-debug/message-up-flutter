@@ -1,7 +1,17 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:message_up/models/chat_model.dart';
 import 'package:message_up/models/message_model.dart';
+import 'package:message_up/models/user_model.dart';
+import 'package:message_up/screens/call_screen.dart';
 import 'package:message_up/services/auth_service.dart';
+import 'package:message_up/services/call_service.dart';
 import 'package:message_up/services/chat_service.dart';
+import 'package:message_up/utils/constants.dart';
 import 'package:message_up/utils/validators.dart';
 import 'package:message_up/widgets/message_bubble.dart';
 import 'package:message_up/widgets/three_dot_menu.dart';
@@ -28,10 +38,27 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   final ScrollController _scroll = ScrollController();
   Message? _replyTo;
   bool _sending = false;
+  bool _sendingImage = false;
   int? _disappearingSeconds;
+  Chat? _chat;
+  StreamSubscription<Chat?>? _chatSub;
+
+  @override
+  void initState() {
+    super.initState();
+    // The chat doc itself: members (for the call button) + lastRead
+    // (for ticks + unread detection). One small subscription.
+    _chatSub = context
+        .read<ChatService>()
+        .chatStream(widget.chatId)
+        .listen((chat) {
+      if (mounted) setState(() => _chat = chat);
+    });
+  }
 
   @override
   void dispose() {
+    _chatSub?.cancel();
     _composer.dispose();
     _scroll.dispose();
     super.dispose();
@@ -63,6 +90,120 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     }
   }
 
+  /// Pick a photo from the gallery, upload it to Firebase Storage
+  /// (no Cloudinary account needed) and send it as an image message.
+  Future<void> _sendImage() async {
+    if (_sendingImage) return;
+    final auth = context.read<AuthService>();
+    final uid = auth.currentUid;
+    if (uid == null) return;
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1600,
+      imageQuality: 80,
+    );
+    if (picked == null) return;
+    setState(() => _sendingImage = true);
+    try {
+      final url = await context.read<ChatService>().uploadChatImage(
+            chatId: widget.chatId,
+            file: File(picked.path),
+            myUid: uid,
+          );
+      await context.read<ChatService>().sendMessage(
+            chatId: widget.chatId,
+            senderId: uid,
+            senderName: auth.currentUser?.displayName ?? '',
+            text: '',
+            type: 'image',
+            imageUrl: url,
+            disappearingSeconds: _disappearingSeconds,
+          );
+      _scrollToBottom();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Photo could not be sent.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _sendingImage = false);
+    }
+  }
+
+  /// Start a real 1:1 voice call with the other member of this chat.
+  Future<void> _startCall() async {
+    final chat = _chat;
+    final auth = context.read<AuthService>();
+    final myUid = auth.currentUid;
+    if (chat == null || myUid == null) return;
+    if (chat.isGroup) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Group calls are not in this build — 1:1 only.')),
+      );
+      return;
+    }
+    final otherId = chat.members.firstWhere(
+      (m) => m != myUid,
+      orElse: () => '',
+    );
+    if (otherId.isEmpty) return;
+    try {
+      final callId = await CallService().startCall(
+        callerId: myUid,
+        callerName: auth.currentUser?.displayName ?? '',
+        calleeId: otherId,
+        calleeName: widget.title,
+        type: 'voice',
+      );
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => CallScreen(
+            callId: callId,
+            isCaller: true,
+            peerName: widget.title,
+            peerPhoto: '',
+            isVideo: false,
+            myUid: myUid,
+          ),
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not start the call.')),
+        );
+      }
+    }
+  }
+
+  /// Ticks from the chat doc's `lastRead` map (the website's seen-state):
+  /// delivered = the other side has opened this chat at least once,
+  /// read = their lastRead is at/after this message. Falls back to the
+  /// per-message fields when the map is missing (older chats).
+  /// (delivered, read) for one of MY messages.
+  (bool, bool) _tickState(Message m, String myUid) {
+    final chat = _chat;
+    if (chat == null) return (m.delivered, m.read);
+    final others =
+        chat.members.where((member) => member != myUid).toList();
+    if (others.isEmpty) return (m.delivered, m.read);
+    final created = m.createdAt;
+    if (created == null) return (m.delivered, m.read);
+    var anyOpened = false;
+    var allRead = true;
+    for (final other in others) {
+      final lastRead = chat.lastRead[other];
+      if (lastRead != null) anyOpened = true;
+      if (lastRead == null || lastRead.isBefore(created)) {
+        allRead = false;
+      }
+    }
+    return (anyOpened || m.delivered, allRead || m.read);
+  }
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) {
@@ -86,12 +227,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.call),
-            tooltip: 'Voice call (coming soon)',
-            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                  content: Text(
-                      'Voice calls arrive with the WebRTC wiring (see Calls screen).')),
-            ),
+            tooltip: 'Voice call',
+            onPressed: _startCall,
           ),
           ThreeDotMenu(
             title: widget.title,
@@ -136,10 +273,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 }
                 final messages = snapshot.data ?? <Message>[];
                 // Mark others' messages read now that the chat is open —
-                // only when there is actually something unread, so the
-                // write does not retrigger this builder in a loop.
-                final hasUnread = messages.any(
-                    (m) => m.senderId != myUid && !m.read);
+                // compared against MY lastRead stamp, so an already-read
+                // chat costs no writes at all.
+                final myLastRead = _chat?.lastRead[myUid];
+                final hasUnread = messages.any((m) =>
+                    m.senderId != myUid &&
+                    (myLastRead == null ||
+                        (m.createdAt != null &&
+                            m.createdAt!.isAfter(myLastRead))));
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (mounted && hasUnread) {
                     chatService.markRead(widget.chatId, myUid);
@@ -160,9 +301,17 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                   itemCount: messages.length,
                   itemBuilder: (context, i) {
                     final m = messages[i];
+                    final isMine = m.senderId == myUid;
+                    // Ticks for my messages come from the lastRead map.
+                    final shown = isMine
+                        ? m.copyWith(
+                            delivered: _tickState(m, myUid).$1,
+                            read: _tickState(m, myUid).$2,
+                          )
+                        : m;
                     return MessageBubble(
-                      message: m,
-                      isMine: m.senderId == myUid,
+                      message: shown,
+                      isMine: isMine,
                       onReply: () => setState(() => _replyTo = m),
                       onForward: () => _forward(context, m),
                       onStar: () => chatService.setStarred(
@@ -204,6 +353,17 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
               child: Row(
                 children: [
+                  IconButton(
+                    icon: _sendingImage
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.image),
+                    tooltip: 'Send photo',
+                    onPressed: _sendingImage ? null : _sendImage,
+                  ),
                   Expanded(
                     child: TextField(
                       controller: _composer,
@@ -294,15 +454,115 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     );
   }
 
-  void _forward(BuildContext context, Message m) {
-    // Forwarding target picker: for this first native cut, forward into
-    // any existing chat is done by picking from the user's chat list.
-    // Kept intentionally simple: copy the text into the composer of
-    // this chat is NOT what forward means, so we show a picker instead.
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-          content: Text('Forward: pick a chat from Chats, long-press, '
-              'then choose Forward (target picker ships in the next cut).')),
+  /// Forward [m] into another chat: pick the target chat, then send a
+  /// copy there with forwarded=true (text or photo, same as the original).
+  void _forward(BuildContext context, Message m) async {
+    final auth = context.read<AuthService>();
+    final myUid = auth.currentUid;
+    if (myUid == null) return;
+    final service = context.read<ChatService>();
+    final target = await showDialog<Chat>(
+      context: context,
+      builder: (ctx) => const _ForwardPicker(),
     );
+    if (target == null || !context.mounted) return;
+    await service.sendMessage(
+      chatId: target.id,
+      senderId: myUid,
+      senderName: auth.currentUser?.displayName ?? '',
+      text: m.text,
+      type: m.type,
+      imageUrl: m.imageUrl,
+    );
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Forwarded')),
+      );
+    }
+  }
+}
+
+/// Chat picker for forwarding: titles resolved from the users docs,
+/// like the main chat list does.
+class _ForwardPicker extends StatefulWidget {
+  const _ForwardPicker();
+
+  @override
+  State<_ForwardPicker> createState() => _ForwardPickerState();
+}
+
+class _ForwardPickerState extends State<_ForwardPicker> {
+  Map<String, String> _namesByUid = {};
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = context.read<AuthService>();
+    final myUid = auth.currentUid ?? '';
+    final service = context.read<ChatService>();
+    return AlertDialog(
+      title: const Text('Forward to…'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: StreamBuilder<List<Chat>>(
+          stream: service.chatsStream(myUid),
+          builder: (context, snapshot) {
+            final chats = snapshot.data ?? <Chat>[];
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _loadNames(chats);
+            });
+            if (chats.isEmpty) {
+              return const Text('No chats yet.');
+            }
+            return ListView.builder(
+              shrinkWrap: true,
+              itemCount: chats.length,
+              itemBuilder: (_, i) {
+                final chat = chats[i];
+                return ListTile(
+                  title: Text(chat.displayTitle(myUid, _namesByUid)),
+                  subtitle: Text(
+                    chat.lastMessage,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  onTap: () => Navigator.pop(context, chat),
+                );
+              },
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _loadNames(List<Chat> chats) async {
+    final ids = <String>{};
+    for (final c in chats) {
+      ids.addAll(c.members);
+    }
+    final missing = ids.where((id) => !_namesByUid.containsKey(id));
+    if (missing.isEmpty) return;
+    final db = FirebaseFirestore.instance;
+    final names = Map<String, String>.from(_namesByUid);
+    for (final id in missing) {
+      try {
+        final doc = await db
+            .collection(AppConstants.usersCollection)
+            .doc(id)
+            .get();
+        if (doc.exists) {
+          names[id] = ChatUser.fromDoc(doc).displayName;
+        }
+      } catch (_) {
+        // Best-effort: the row still shows with a fallback title.
+      }
+    }
+    if (mounted) setState(() => _namesByUid = names);
   }
 }

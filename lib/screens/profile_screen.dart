@@ -1,6 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:message_up/models/user_model.dart';
 import 'package:message_up/services/auth_service.dart';
+import 'package:message_up/services/chat_service.dart';
+import 'package:message_up/utils/time_format.dart';
 import 'package:message_up/utils/validators.dart';
 import 'package:message_up/widgets/avatar_widget.dart';
 import 'package:provider/provider.dart';
@@ -17,6 +22,7 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   bool _editing = false;
   bool _saving = false;
+  bool _photoSaving = false;
   late TextEditingController _nameController;
   late TextEditingController _aboutController;
 
@@ -59,6 +65,51 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  /// Change profile photo: gallery -> Firebase Storage -> users doc.
+  Future<void> _changePhoto() async {
+    if (_photoSaving) return;
+    final auth = context.read<AuthService>();
+    final uid = auth.currentUid;
+    if (uid == null) return;
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 800,
+      imageQuality: 85,
+    );
+    if (picked == null) return;
+    setState(() => _photoSaving = true);
+    try {
+      final url = await ChatService().uploadProfilePhoto(
+        file: File(picked.path),
+        myUid: uid,
+      );
+      await auth.updateProfile(photoUrl: url);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Profile photo updated')),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Photo could not be updated.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _photoSaving = false);
+    }
+  }
+
+  /// Display name with fallbacks: profile doc -> Google account ->
+  /// email prefix. Never a blank name line.
+  String _displayName(ChatUser shown, AuthService auth) {
+    if (shown.displayName.isNotEmpty) return shown.displayName;
+    final googleName = (auth.currentUser?.displayName ?? '').trim();
+    if (googleName.isNotEmpty) return googleName;
+    if (shown.email.isNotEmpty) return shown.email.split('@').first;
+    return 'Message Up user';
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = context.read<AuthService>();
@@ -73,23 +124,51 @@ class _ProfileScreenState extends State<ProfileScreen> {
           photoUrl: auth.currentUser?.photoURL ?? '',
         );
         final shown = user ?? fallback;
+        final displayName = _displayName(shown, auth);
         return ListView(
           padding: const EdgeInsets.all(20),
           children: [
             Center(
-              child: AvatarWidget(
-                photoUrl:
-                    shown.photoUrl.isEmpty ? null : shown.photoUrl,
-                name: shown.displayName,
-                radius: 52,
-                online: shown.online,
-                showOnlineDot: true,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  AvatarWidget(
+                    photoUrl:
+                        shown.photoUrl.isEmpty ? null : shown.photoUrl,
+                    name: displayName,
+                    radius: 52,
+                    online: shown.online,
+                    showOnlineDot: true,
+                  ),
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: CircleAvatar(
+                      radius: 18,
+                      backgroundColor: const Color(0xFF075E54),
+                      child: IconButton(
+                        padding: EdgeInsets.zero,
+                        icon: _photoSaving
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Icon(Icons.camera_alt,
+                                size: 16, color: Colors.white),
+                        tooltip: 'Change photo',
+                        onPressed: _photoSaving ? null : _changePhoto,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 16),
             if (!_editing) ...[
               Text(
-                shown.displayName,
+                displayName,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                     fontSize: 22, fontWeight: FontWeight.bold),
@@ -153,11 +232,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ],
             const SizedBox(height: 24),
             ListTile(
-              leading: const Icon(Icons.circle, color: Color(0xFF25D366)),
+              leading: Icon(
+                Icons.circle,
+                color: shown.online
+                    ? const Color(0xFF25D366)
+                    : Colors.grey,
+              ),
               title: Text(shown.online ? 'Online' : 'Offline'),
-              subtitle: shown.lastSeen == null
+              subtitle: shown.lastSeen == null || shown.online
                   ? null
-                  : Text('Last seen ${shown.lastSeen}'),
+                  : Text('Last seen ${timeAgo(shown.lastSeen)}'),
             ),
           ],
         );

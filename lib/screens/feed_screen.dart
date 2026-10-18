@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:message_up/models/user_model.dart';
 import 'package:message_up/services/auth_service.dart';
 import 'package:message_up/utils/constants.dart';
 import 'package:message_up/utils/time_format.dart';
@@ -51,9 +52,26 @@ class _FeedScreenState extends State<FeedScreen> {
     }
   }
 
+  /// Toggle like. The WEBSITE stores likes as a MAP {uid: true}, this app
+  /// stores a LIST [uid]. Both are handled: maps get a dotted-path
+  /// update, lists get arrayUnion/arrayRemove.
   Future<void> _toggleLike(
-      String postId, List<String> likes, String myUid) async {
+      String postId, dynamic rawLikes, String myUid) async {
     final ref = _posts.doc(postId);
+    if (rawLikes is Map) {
+      final liked = rawLikes[myUid] == true;
+      if (liked) {
+        await ref.update(<String, dynamic>{
+          'likes.$myUid': FieldValue.delete(),
+        });
+      } else {
+        await ref.update(<String, dynamic>{'likes.$myUid': true});
+      }
+      return;
+    }
+    final likes = rawLikes is List
+        ? rawLikes.map((e) => e.toString()).toList()
+        : <String>[];
     if (likes.contains(myUid)) {
       await ref.update(<String, dynamic>{
         'likes': FieldValue.arrayRemove(<String>[myUid])
@@ -167,9 +185,15 @@ class _FeedScreenState extends State<FeedScreen> {
                   final doc = docs[i];
                   final data = doc.data();
                   final rawLikes = data['likes'];
-                  final likes = rawLikes is List
-                      ? rawLikes.map((e) => e.toString()).toList()
-                      : <String>[];
+                  // Likes: website = Map {uid: true}, app = List [uid].
+                  final likes = rawLikes is Map
+                      ? rawLikes.entries
+                          .where((e) => e.value == true)
+                          .map((e) => e.key.toString())
+                          .toList()
+                      : rawLikes is List
+                          ? rawLikes.map((e) => e.toString()).toList()
+                          : <String>[];
                   final liked = likes.contains(myUid);
                   final created =
                       (data['createdAt'] as Timestamp?)?.toDate();
@@ -181,38 +205,7 @@ class _FeedScreenState extends State<FeedScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              AvatarWidget(
-                                photoUrl: (data['authorPhoto'] as String?)
-                                            ?.isNotEmpty ==
-                                        true
-                                    ? data['authorPhoto'] as String
-                                    : null,
-                                name: (data['authorName'] as String?) ?? '',
-                                radius: 20,
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      (data['authorName'] as String?) ?? '',
-                                      style: const TextStyle(
-                                          fontWeight: FontWeight.bold),
-                                    ),
-                                    Text(
-                                      timeAgo(created),
-                                      style: const TextStyle(
-                                          fontSize: 12, color: Colors.grey),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
+                          _AuthorHeader(data: data),
                           const SizedBox(height: 10),
                           Text((data['text'] as String?) ?? ''),
                           const SizedBox(height: 8),
@@ -220,7 +213,7 @@ class _FeedScreenState extends State<FeedScreen> {
                             children: [
                               TextButton.icon(
                                 onPressed: () => _toggleLike(
-                                    doc.id, likes, myUid),
+                                    doc.id, rawLikes, myUid),
                                 icon: Icon(
                                   liked
                                       ? Icons.favorite
@@ -250,5 +243,103 @@ class _FeedScreenState extends State<FeedScreen> {
         ),
       ],
     );
+  }
+}
+
+/// Post author row: name + avatar + time.
+///
+/// Website posts carry NO author name/photo in the post doc (only the
+/// author's uid), so the name is resolved from the `users` doc when the
+/// post itself has none. Results are cached per author for the session,
+/// so scrolling the feed does not refetch the same profile.
+class _AuthorHeader extends StatefulWidget {
+  const _AuthorHeader({required this.data});
+
+  final Map<String, dynamic> data;
+
+  @override
+  State<_AuthorHeader> createState() => _AuthorHeaderState();
+}
+
+class _AuthorHeaderState extends State<_AuthorHeader> {
+  static final Map<String, ChatUser?> _cache = <String, ChatUser?>{};
+
+  @override
+  Widget build(BuildContext context) {
+    final data = widget.data;
+    final authorId = (data['authorId'] as String?) ??
+        (data['uid'] as String?) ??
+        '';
+    var name = _firstString(data, const [
+      'authorName',
+      'name',
+      'username',
+    ]);
+    var photo = _firstString(data, const [
+      'authorPhoto',
+      'photoURL',
+      'photo',
+      'avatar',
+    ]);
+    final created = (data['createdAt'] as Timestamp?)?.toDate();
+
+    // Post already carries a name -> show it, no fetch needed.
+    // Otherwise resolve from users/{authorId} (cached).
+    if (name.isEmpty && authorId.isNotEmpty) {
+      if (_cache.containsKey(authorId)) {
+        final cached = _cache[authorId];
+        name = cached?.displayName ?? '';
+        if (photo.isEmpty) photo = cached?.photoUrl ?? '';
+      } else {
+        _cache[authorId] = null; // fetching marker — one fetch per author
+        FirebaseFirestore.instance
+            .collection(AppConstants.usersCollection)
+            .doc(authorId)
+            .get()
+            .then((doc) {
+          if (!mounted) return;
+          if (doc.exists) {
+            _cache[authorId] = ChatUser.fromDoc(doc);
+          }
+          setState(() {});
+        }).catchError((_) {});
+      }
+    }
+    if (name.isEmpty) name = 'User';
+
+    return Row(
+      children: [
+        AvatarWidget(
+          photoUrl: photo.isEmpty ? null : photo,
+          name: name,
+          radius: 20,
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                name,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text(
+                timeAgo(created),
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  static String _firstString(
+      Map<String, dynamic> map, List<String> keys) {
+    for (final key in keys) {
+      final value = map[key];
+      if (value is String && value.isNotEmpty) return value;
+    }
+    return '';
   }
 }
